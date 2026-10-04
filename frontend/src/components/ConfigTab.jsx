@@ -10,6 +10,9 @@ export default function ConfigTab({ portfolio, portfolioMode = 'live', onConfigU
   const [stopLoss, setStopLoss] = useState(config.stopLossPercent * 100);
   const [maxPositions, setMaxPositions] = useState(config.maxPositions);
   const [aggressiveness, setAggressiveness] = useState(config.aggressiveness);
+  const [rotationEnabled, setRotationEnabled] = useState(config.rotationEnabled === true);
+  const [rotationMinCandidateScore, setRotationMinCandidateScore] = useState(config.rotationMinCandidateScore || 88);
+  const [rotationMaxUnderperformerProfit, setRotationMaxUnderperformerProfit] = useState(config.rotationMaxUnderperformerProfit ?? 2.0);
 
   // Local state for manual deposit
   const [depositAmount, setDepositAmount] = useState('');
@@ -76,7 +79,10 @@ export default function ConfigTab({ portfolio, portfolioMode = 'live', onConfigU
           targetProfitPercent: targetProfit / 100,
           stopLossPercent: stopLoss / 100,
           maxPositions: Number(maxPositions),
-          aggressiveness
+          aggressiveness,
+          rotationEnabled,
+          rotationMinCandidateScore: Number(rotationMinCandidateScore),
+          rotationMaxUnderperformerProfit: Number(rotationMaxUnderperformerProfit)
         })
       });
       if (!res.ok) throw new Error("Failed to save settings");
@@ -422,6 +428,53 @@ export default function ConfigTab({ portfolio, portfolioMode = 'live', onConfigU
                 className="config-input"
               />
               <div className="config-desc">Maximum number of stock positions held in parallel (governs capital scaling per stock).</div>
+            </div>
+
+            <div className="config-item" style={{ background: 'rgba(255, 255, 255, 0.02)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <label style={{ margin: 0, fontWeight: '600', color: 'var(--text-primary)' }}>
+                  Dynamic Capital Rotation
+                </label>
+                <input
+                  type="checkbox"
+                  checked={rotationEnabled}
+                  onChange={(e) => setRotationEnabled(e.target.checked)}
+                  style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                />
+              </div>
+              <div className="config-desc" style={{ marginBottom: '0.75rem' }}>
+                When maximum holding slots are full, automatically liquidates the weakest underperforming holding to fund incoming high-conviction breakout setups. Sector caps are disabled so holdings can naturally concentrate in the leading market sector.
+              </div>
+
+              {rotationEnabled && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.5rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Min. Candidate Score to Trigger</label>
+                    <input
+                      type="number"
+                      min="75"
+                      max="100"
+                      value={rotationMinCandidateScore}
+                      onChange={(e) => setRotationMinCandidateScore(Number(e.target.value))}
+                      className="config-input"
+                      style={{ marginTop: '0.25rem', padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Max Profit of Replaced Lagger (%)</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="-10"
+                      max="10"
+                      value={rotationMaxUnderperformerProfit}
+                      onChange={(e) => setRotationMaxUnderperformerProfit(Number(e.target.value))}
+                      className="config-input"
+                      style={{ marginTop: '0.25rem', padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <button type="submit" className="btn btn-primary" style={{ marginTop: '0.5rem' }} disabled={saving}>

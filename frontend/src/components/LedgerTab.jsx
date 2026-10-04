@@ -77,6 +77,18 @@ export default function LedgerTab({ history = [] }) {
         : history.reduce((sum, t) => sum + t.profitPercent, 0) / history.length)
     : 0;
 
+  const avgHoldingDays = useMemo(() => {
+    if (activeItems.length === 0) return 0;
+    const totalDays = activeItems.reduce((sum, item) => {
+      const bDate = new Date(item.buyDate);
+      const sDate = new Date(viewMode === 'campaigns' ? item.lastSellDate : item.sellDate);
+      const diffTime = Math.abs(sDate - bDate);
+      const diffDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+      return sum + diffDays;
+    }, 0);
+    return totalDays / activeItems.length;
+  }, [activeItems, viewMode]);
+
   // Find best trade / campaign
   const bestItem = useMemo(() => {
     if (activeItems.length === 0) return null;
@@ -132,6 +144,18 @@ export default function LedgerTab({ history = [] }) {
           </div>
           <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
             {viewMode === 'campaigns' ? 'Blended per-trade expectation' : 'Unweighted per-fill average'}
+          </span>
+        </div>
+
+        <div className="ledger-summary-card">
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            Avg. Holding Period
+          </span>
+          <div className="ledger-summary-val">
+            {totalCount > 0 ? `${avgHoldingDays.toFixed(1)} days` : '--'}
+          </div>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+            {viewMode === 'campaigns' ? 'Mean duration per campaign' : 'Mean duration per execution'}
           </span>
         </div>
       </div>

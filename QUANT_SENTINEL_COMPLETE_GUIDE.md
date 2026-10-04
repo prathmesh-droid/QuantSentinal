@@ -499,11 +499,11 @@ If the stop is above the entry price when it is hit, the exit is labelled **Trai
 > [!IMPORTANT]
 > Earlier versions of this guide described breakeven at +10%, an +8% lock at +15% and a hard sell at +25%. That is **no longer how the engine works**. The ladder above is the current behavior in `backend/engine.js`, and the dashboard Trade Plan panel mirrors it.
 
-### Sector Concentration Defense
-To prevent correlation meltdowns (such as an IT sector crash or a Banking crisis hitting multiple positions at once), QuantSentinel enforces portfolio rules:
-- **Maximum 2 positions per sector** for new entries during the scan. The idle-cash deployment pass allows up to 3 per sector.
-- **Index ETFs are excluded** from stock selection. They are used only as benchmarks for the market regime.
-- **Algo Top 25 qualification**: a 2nd position in a sector is only flagged as buyable once the first position is risk-free.
+### Sector Allocation Policy & Dynamic Capital Rotation
+QuantSentinel allows capital to flow freely into market-leading momentum themes without artificial sector caps:
+- **Unconstrained Sector Allocation**: Sector caps have been completely removed across the scan engine, Algo Top 25 rankings, and idle cash deployment. Theoretically, all holdings can come from the same sector when strong thematic momentum dominates the market (e.g. PSU Banks, Defense, or Capital Goods).
+- **Index ETFs Exclusion**: Index ETFs remain excluded from stock selection, functioning purely as macro benchmark regimes.
+- **Dynamic Capital Rotation**: When all holding slots are occupied, the engine automatically evaluates incoming high-conviction candidates (Score >= 88). If the portfolio holds an underperforming or flat position (return <= +2.0%), that holding is systematically liquidated at market close and replaced with the new momentum leader to maximize velocity of capital.
 
 ---
 

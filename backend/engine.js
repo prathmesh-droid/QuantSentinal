@@ -98,9 +98,9 @@ const INITIAL_STATE = {
     stopLossPercent: 0.048,    // -4.8% strict risk-managed stop loss (eliminates large drawdowns)
     maxPositions: 10,          // 10 concentrated positions (~10%-12% each) to maximize compounding & reduce cash drag
     aggressiveness: 'aggressive', // conservative, moderate, aggressive, hyper
-    rotationEnabled: false,     // Disabled to eliminate whipsaw churn on normal pullbacks
-    rotationMinCandidateScore: 90, // High bar if rotation is manually turned on
-    rotationMaxUnderperformerProfit: -4.5 // Only rotate if trade is broken beyond -4.5%
+    rotationEnabled: false,     // Disabled: do not rotate out positions
+    rotationMinCandidateScore: 88, // High-conviction entry threshold for rotation
+    rotationMaxUnderperformerProfit: 2.0 // Rotates out positions performing below +2.0%
   }
 };
 
@@ -729,13 +729,6 @@ function scanMarketCandidates(simDate, cachedData, currentHoldings = [], config 
     }
   }
 
-  // Count sector distribution in current holdings to enforce sector diversification
-  const sectorCounts = {};
-  for (const h of currentHoldings) {
-    const sec = h.sector || 'Other';
-    sectorCounts[sec] = (sectorCounts[sec] || 0) + 1;
-  }
-
   for (const stock of WATCHLIST) {
     // Exclude index ETFs: they are macro benchmarks for regime analysis, not individual swing stocks
     if (stock.sector === 'ETFs') continue;
@@ -756,12 +749,6 @@ function scanMarketCandidates(simDate, cachedData, currentHoldings = [], config 
         continue; // Cannot add to this holding
       }
       isAccumulationCandidate = true;
-    }
-
-    // Sector limit: max 2 positions per sector for new entries
-    const maxPerSector = 2;
-    if (!isAccumulationCandidate && stock.sector !== 'ETFs' && (sectorCounts[stock.sector] || 0) >= maxPerSector) {
-      continue;
     }
 
     const stockHistory = cachedData[stock.symbol];
@@ -1426,31 +1413,17 @@ async function runSimulation(targetEndDateStr, forceRefresh = false, portfolioTy
         const availableSlots = state.config.maxPositions - state.holdings.length;
         let canBuy = isAccumulation ? (state.cash >= 1000) : (availableSlots > 0 && state.cash >= 1000);
 
-        // Check sector limit (max 2 positions per sector)
-        let sectorLimitReached = false;
-        if (!isAccumulation && targetStock.sector !== 'ETFs') {
-          const sectorHoldings = state.holdings.filter(h => h.sector === targetStock.sector);
-          if (sectorHoldings.length >= 2) {
-            sectorLimitReached = true;
-          } else if (sectorHoldings.length === 1) {
-            if (sectorHoldings[0].stopLoss < sectorHoldings[0].buyPrice) {
-              sectorLimitReached = true;
-            }
-          }
-        }
-
         const rotationEnabled = state.config.rotationEnabled !== false;
-        const minCandScore = state.config.rotationMinCandidateScore || 90;
-        const maxUnderperformerProfit = state.config.rotationMaxUnderperformerProfit || -1.0;
+        const minCandScore = state.config.rotationMinCandidateScore || 88;
+        const maxUnderperformerProfit = state.config.rotationMaxUnderperformerProfit ?? 2.0;
 
-        if (!isAccumulation && rotationEnabled && (!canBuy || sectorLimitReached || state.cash < targetStock.price) && targetStock.score >= minCandScore && state.holdings.length > 0) {
+        if (!isAccumulation && rotationEnabled && (!canBuy || state.cash < targetStock.price) && targetStock.score >= minCandScore && state.holdings.length > 0) {
           let worstHoldingIndex = -1;
           let worstHoldingProfit = Infinity;
 
           for (let j = 0; j < state.holdings.length; j++) {
             const h = state.holdings[j];
             if (h.buyDate === simDate) continue;
-            if (sectorLimitReached && h.sector !== targetStock.sector) continue;
             if (h.profitPercent < worstHoldingProfit) {
               worstHoldingProfit = h.profitPercent;
               worstHoldingIndex = j;
@@ -1494,12 +1467,9 @@ async function runSimulation(targetEndDateStr, forceRefresh = false, portfolioTy
               });
               state.holdings.splice(worstHoldingIndex, 1);
               canBuy = true;
-              sectorLimitReached = false;
             }
           }
         }
-
-        if (sectorLimitReached) continue;
 
         if (canBuy && state.cash >= 1000) {
           if (executeBuy(targetStock)) {
@@ -1518,15 +1488,75 @@ async function runSimulation(targetEndDateStr, forceRefresh = false, portfolioTy
         executeBuy(cand);
       }
 
-      // 2. Second priority: New Breakouts & Expansion setups
-      for (const targetStock of candidates.filter(x => !x.isAccumulation)) {
-        if (state.holdings.length >= state.config.maxPositions) break;
-        if (state.cash < 4000) break;
+      // 2. Second priority: New Breakouts & Expansion setups with capital rotation
+      const rotationEnabled = state.config.rotationEnabled !== false;
+      const minCandScore = state.config.rotationMinCandidateScore || 88;
+      const maxUnderperformerProfit = state.config.rotationMaxUnderperformerProfit ?? 2.0;
 
+      for (const targetStock of candidates.filter(x => !x.isAccumulation)) {
         // Only block non-accumulation buys if market is in confirmed deep crash (return5d < -2.0%)
         if (marketRegime.regime === 'RISK_OFF' && marketRegime.return5d < -0.02) {
           continue;
         }
+
+        const isFull = state.holdings.length >= state.config.maxPositions;
+        const lowCash = state.cash < targetStock.price || state.cash < 4000;
+
+        if ((isFull || lowCash) && rotationEnabled && targetStock.score >= minCandScore && state.holdings.length > 0) {
+          let worstHoldingIndex = -1;
+          let worstHoldingProfit = Infinity;
+
+          for (let j = 0; j < state.holdings.length; j++) {
+            const h = state.holdings[j];
+            if (h.buyDate === simDate) continue;
+            if (h.profitPercent < worstHoldingProfit) {
+              worstHoldingProfit = h.profitPercent;
+              worstHoldingIndex = j;
+            }
+          }
+
+          if (worstHoldingIndex !== -1 && worstHoldingProfit <= maxUnderperformerProfit) {
+            const position = state.holdings[worstHoldingIndex];
+            const stockData = cachedData[position.symbol];
+            const dayBar = stockData ? stockData.find(row => row.date === simDate) : null;
+            const sellPrice = dayBar ? dayBar.close : position.currentPrice;
+            const revenue = position.quantity * sellPrice;
+
+            if (state.cash + revenue >= targetStock.price) {
+              const cost = position.quantity * position.buyPrice;
+              const profit = revenue - cost;
+              const profitPercent = (profit / cost) * 100;
+              state.cash += revenue;
+
+              state.history.push({
+                symbol: position.symbol,
+                name: position.name,
+                sector: position.sector,
+                quantity: position.quantity,
+                buyPrice: position.buyPrice,
+                sellPrice,
+                buyDate: position.buyDate,
+                sellDate: simDate,
+                profit,
+                profitPercent,
+                reason: `Replaced by ${targetStock.symbol} (Score: ${targetStock.score.toFixed(1)})`
+              });
+              todayTransactions.push({
+                type: 'SELL',
+                symbol: position.symbol,
+                quantity: position.quantity,
+                price: sellPrice,
+                profit,
+                profitPercent,
+                reason: `Replaced by ${targetStock.symbol}`
+              });
+              state.holdings.splice(worstHoldingIndex, 1);
+            }
+          }
+        }
+
+        if (state.holdings.length >= state.config.maxPositions) break;
+        if (state.cash < 4000) break;
 
         executeBuy(targetStock);
       }
@@ -1969,12 +1999,6 @@ async function getTop25AlgoRankings(simDate, forceRefresh = false) {
     const holdingsCount = (state.holdings || []).length;
     const maxPositions = state.config?.maxPositions || 12;
 
-    const sectorCounts = {};
-    for (const h of (state.holdings || [])) {
-      const sec = h.sector || 'Other';
-      sectorCounts[sec] = (sectorCounts[sec] || 0) + 1;
-    }
-
     let executionStatus = null;
 
     if (!exactBarOnDate) {
@@ -1995,18 +2019,6 @@ async function getTop25AlgoRankings(simDate, forceRefresh = false) {
         label: 'Portfolio Full',
         reason: `Trading desk is at full capacity (${holdingsCount}/${maxPositions} concurrent holdings). No available position slot.`
       };
-    } else if (stock.sector !== 'ETFs' && (sectorCounts[stock.sector] || 0) >= 1) {
-      const heldInSector = (state.holdings || []).find(h => h.sector === stock.sector);
-      const isRiskFree = heldInSector && (heldInSector.stopLoss >= heldInSector.buyPrice);
-      if (!isRiskFree || (sectorCounts[stock.sector] || 0) >= 2) {
-        executionStatus = {
-          status: 'SECTOR_CAP',
-          label: `Sector Cap (${stock.sector})`,
-          reason: isRiskFree
-            ? `Portfolio already holds 2 positions in ${stock.sector}. Strict risk limit enforces max 2 positions.`
-            : `Portfolio already holds ${heldInSector ? heldInSector.symbol.replace('.NS', '') : 'a stock'} in ${stock.sector} with active risk. To avoid sector correlation drawdowns, a 2nd position is only allowed after the 1st holding's stop loss is locked in profit.`
-        };
-      }
     }
 
     if (!executionStatus) {
@@ -2343,13 +2355,6 @@ async function deployIdleCash(simDate, portfolioType = 'backtest') {
       continue;
     }
 
-    // Sector diversification check: maximum 3 positions per sector (except ETFs)
-    if (!isAccumulation) {
-      const currentSectorCount = state.holdings.filter(h => h.sector === targetStock.sector).length;
-      if (currentSectorCount >= 3) {
-        continue;
-      }
-    }
 
     availableSlots = state.config.maxPositions - state.holdings.length;
     if (!isAccumulation && (availableSlots <= 0 || state.cash < 1000)) continue;
